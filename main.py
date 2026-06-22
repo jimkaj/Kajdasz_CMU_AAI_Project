@@ -28,15 +28,56 @@ from agents.assessment_agent import AssessmentAgent
 from agents.matrix_agent import MatrixAgent
 from agents.scraper_agent import ScraperAgent
 from config import settings
-from tools.audit_logger import setup_audit_logging, AuditLogger
+from tools.audit_logger import setup_audit_logging, setup_console_logging, AuditLogger
 from tools.file_manager import FileManager
 from tools.llm_interface import LLMInterface
 from tools.web_scraper import WebScraper
 
 
-# Configure logging
+# Configure logging: file-based audit trail + live console output
 setup_audit_logging(settings.logs_dir)
+setup_console_logging(settings.enable_debug_logging)
 logger = logging.getLogger(__name__)
+
+
+def render_matrix(matrix_state) -> None:
+    """Print the ACH decision matrix to stdout as a formatted table."""
+    aggregates = list(matrix_state.hypothesis_aggregates.values())
+    try:
+        from rich.console import Console
+        from rich.table import Table
+
+        table = Table(title="ACH Decision Matrix", title_style="bold")
+        table.add_column("Hypothesis", style="cyan", no_wrap=False)
+        for col in ("++", "+", "N/A", "-", "--"):
+            table.add_column(col, justify="right")
+        table.add_column("Net Support", justify="right", style="bold")
+
+        for agg in aggregates:
+            t = agg.evidence_tally
+            net = f"{agg.net_support:+.1f}"
+            net_style = "green" if agg.net_support > 0 else "red" if agg.net_support < 0 else "white"
+            table.add_row(
+                agg.hypothesis_name,
+                str(t["++"]), str(t["+"]), str(t["N/A"]), str(t["-"]), str(t["--"]),
+                f"[{net_style}]{net}[/{net_style}]",
+            )
+        console = Console()
+        console.print()
+        console.print(table)
+        console.print(
+            f"[dim]{matrix_state.article_count} articles processed | "
+            f"snapshots in data/matrix/[/dim]"
+        )
+    except ImportError:
+        # Fallback: plain text if rich is unavailable.
+        print("\nACH Decision Matrix")
+        for agg in aggregates:
+            t = agg.evidence_tally
+            print(
+                f"  {agg.hypothesis_name}: ++={t['++']} +={t['+']} "
+                f"N/A={t['N/A']} -={t['-']} --={t['--']} net={agg.net_support:+.1f}"
+            )
 
 
 def load_hypothesis_config(config_path: Path) -> list[dict]:
@@ -143,20 +184,10 @@ def run_agent_pipeline() -> None:
         
         logger.info(f"Matrix updated. Total articles processed: {matrix_state.article_count}")
         logger.info("Pipeline execution complete")
-        
-        # Print current matrix state
-        logger.info("Current ACH Matrix State:")
-        for hyp_id, agg in matrix_state.hypothesis_aggregates.items():
-            logger.info(
-                f"  {agg.hypothesis_name}: "
-                f"++={agg.evidence_tally['++']}, "
-                f"+={agg.evidence_tally['+']}, "
-                f"N/A={agg.evidence_tally['N/A']}, "
-                f"-={agg.evidence_tally['-']}, "
-                f"--={agg.evidence_tally['--']}, "
-                f"Net Support={agg.net_support:+.1f}"
-            )
-        
+
+        # Render the final matrix to stdout as the run's headline result
+        render_matrix(matrix_state)
+
     except Exception as e:
         logger.error(f"Pipeline failed: {e}", exc_info=True)
         AuditLogger.log_error("orchestrator", e)

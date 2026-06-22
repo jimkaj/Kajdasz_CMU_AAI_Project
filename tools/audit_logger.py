@@ -3,6 +3,48 @@
 import logging
 from pathlib import Path
 
+# Third-party loggers that are noisy at INFO/DEBUG; kept quiet on the console.
+_NOISY_LOGGERS = ("urllib3", "requests", "httpx", "httpcore", "filelock", "asyncio")
+
+
+def setup_console_logging(debug: bool = False) -> None:
+    """Stream agent logs to the terminal so a run shows live progress.
+
+    The agents/tools log via module loggers (``agents.*``, ``tools.*``) which
+    propagate to the root logger, so a single console handler on root surfaces
+    all of them. File-based audit logging (see ``setup_audit_logging``) is
+    unaffected. Uses ``rich`` for readable output when available.
+
+    Args:
+        debug: If True, show DEBUG-level messages; otherwise INFO and above.
+    """
+    root = logging.getLogger()
+    level = logging.DEBUG if debug else logging.INFO
+    root.setLevel(level)
+
+    # Idempotent: don't stack duplicate console handlers across calls.
+    if any(getattr(h, "_ach_console", False) for h in root.handlers):
+        return
+
+    try:
+        from rich.logging import RichHandler
+
+        handler = RichHandler(show_path=False, rich_tracebacks=True, markup=False)
+        handler.setFormatter(logging.Formatter("%(message)s", datefmt="[%X]"))
+    except ImportError:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
+        )
+
+    handler.setLevel(level)
+    handler._ach_console = True  # marker for idempotency
+    root.addHandler(handler)
+
+    # Keep chatty third-party libraries off the console.
+    for name in _NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
 
 def setup_audit_logging(logs_dir: Path) -> None:
     """Configure audit logging for all agent interactions.

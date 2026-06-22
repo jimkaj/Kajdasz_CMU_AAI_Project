@@ -86,7 +86,7 @@ class AssessmentAgent:
             2. Per hypothesis, measure self-consistency across passes for confidence.
             3. Flag for human review if any confidence < threshold.
         """
-        logger.info(f"Assessing article: {article.title[:50]}...")
+        logger.debug(f"Assessing article: {article.title[:60]}")
 
         # Run multi-pass comparative evaluation; each pass returns {hyp_id: mark}.
         # Collect the per-pass marks for each hypothesis to measure consistency.
@@ -154,9 +154,14 @@ class AssessmentAgent:
             List of AssessmentResults (forwarded to Matrix Agent)
         """
         results = []
-        for article in articles:
+        total = len(articles)
+        for i, article in enumerate(articles, start=1):
+            logger.info(
+                f"[{i}/{total}] assessing ({self.config.llm_num_passes} passes): "
+                f"{article.title[:60]}"
+            )
             result = self.assess_article(article)
             results.append(result)
-        
+
         logger.info(f"Assessed {len(results)} articles")
         return results

@@ -144,7 +144,7 @@ class MatrixAgent:
         
         self.state.article_count += 1
         self.state.last_update = datetime.utcnow()
-        logger.info(f"Ingested assessment for article {assessment.article_id}")
+        logger.debug(f"Ingested assessment for article {assessment.article_id}")
 
     def save_matrix_snapshot(self) -> Path:
         """Save current matrix state as versioned CSV snapshot.

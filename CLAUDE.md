@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A three-tier multi-agent system applying **Analysis of Competing Hypotheses (ACH)** to geopolitical news: scrape Reuters → score each article's diagnostic value against competing hypotheses → maintain a versioned evidence matrix. CMU Agentic AI Certificate capstone (James Kajdasz).
+A three-tier multi-agent system applying **Analysis of Competing Hypotheses (ACH)** to geopolitical news: ingest full-text articles (The Guardian Content API) → score each article's diagnostic value against competing hypotheses → maintain a versioned evidence matrix. CMU Agentic AI Certificate capstone (James Kajdasz).
 
 **Current state: all three tiers implemented and verified end-to-end.** `python main.py` runs the full Scraper → Assessment → Matrix pipeline live (verified with Ollama + `llama3.1`). The **Scraper Agent** (Tier 1, Guardian Content API, full body text), **Assessment Agent + LLMInterface** (Tier 2, comparative ACH self-consistency scoring), and **Matrix Agent** (Tier 3, cross-run accumulating tallies + storage-cap pruning) all work.
 
@@ -18,10 +18,12 @@ When implementing a stub, the surrounding non-stub code already defines the expe
 ## Commands
 
 ```bash
-uv sync                 # Install deps (see gotcha below — does NOT install pydantic-settings)
-cp .env.template .env   # Configure; Settings auto-loads .env
-python main.py          # Run the full Scraper → Assessment → Matrix pipeline
+uv sync                 # Install deps
+cp .env.template .env   # Optional — Settings auto-loads .env; defaults work out of the box
+uv run python main.py   # Run the full Scraper → Assessment → Matrix pipeline (live console + table)
 ```
+
+Use `uv run python main.py`, not bare `python main.py`, so the project `.venv` and its deps are used regardless of shell activation. Requires Ollama running with a long-context model (`ollama pull llama3.1`).
 
 ```bash
 uv run pytest                              # run the test suite (hermetic; no network/LLM needed)
@@ -32,13 +34,11 @@ uv run pytest --cov=agents --cov=tools     # with coverage
 
 Tooling configured in `pyproject.toml` dev group: `black`, `ruff`, `pytest` + `pytest-cov`. Pytest config (`testpaths`, warning filters) is in `[tool.pytest.ini_options]`.
 
-## Known gotchas (docs vs. reality)
+## Non-obvious facts
 
-The README and `AGENTS.md` describe an aspirational design; several claims do not match the code:
-- **Articles come from The Guardian, not Reuters.** Reuters' ToS prohibit scraping and its full text is licensed-only (Reuters Connect, `documentation/Reuters_Delivery_Overview.pdf`). Tier 1 sources articles from **The Guardian Open Platform Content API** (`content.guardianapis.com`), which returns full article body text for free. `settings.guardian_api_key` defaults to the literal `"test"` key (dev only, rate-limited); set `GUARDIAN_API_KEY` in `.env` for a real free key. (Earlier iterations used Google News RSS for Reuters headlines — now replaced because it only yields snippets, not full text.)
-- **Tests live in `tests/`** (hermetic, mocked). Run with `uv run pytest`. Note the README's `pytest tests/ -v --cov=...` invocation predates them but now works.
-- **No `config/agent_config.py`** despite `AGENTS.md` listing it. Config lives in `config/settings.py` (Pydantic `Settings`), `config/hypothesis_config.yaml`, and `config/domain_whitelist.txt`.
-- **Orchestration is plain sequential Python, not LangGraph.** `main.py` calls `agent.execute(...)` in order and passes return values by hand. `langgraph`/`langchain` are dependencies but not yet used. Don't assume a state graph exists.
+- **Articles come from The Guardian, not Reuters** (despite the project name). Reuters' ToS prohibit scraping and its full text is licensed-only (Reuters Connect, `documentation/Reuters_Delivery_Overview.pdf`); the Guardian Open Platform Content API (`content.guardianapis.com`) returns full body text for free. `settings.guardian_api_key` defaults to the literal `"test"` key (dev only, rate-limited); set `GUARDIAN_API_KEY` for a real free key. (An earlier iteration used Google News RSS but it only yields snippets, not full text.)
+- **Orchestration is plain sequential Python, not LangGraph.** `main.py` calls `agent.execute(...)` in order and passes return values by hand. `langgraph`/`langchain` — and `torch`/`transformers`/`sentence-transformers` — are installed but unused at runtime (the LLM path is the Ollama HTTP API). Don't assume a state graph or local transformer inference.
+- **Dependencies are injected in `main.py`**: `ScraperAgent(config, web_scraper, file_manager)`, `AssessmentAgent(config, hypotheses, llm_interface)`, `MatrixAgent(config, file_manager)`. Config lives in `config/settings.py` (Pydantic `Settings`), `config/hypothesis_config.yaml`, and `config/domain_whitelist.txt` (there is no `config/agent_config.py`).
 
 ## Architecture
 
@@ -48,13 +48,13 @@ Single linear pass in `main.py` → `run_agent_pipeline()`:
 2. **AssessmentAgent** (`agents/assessment_agent.py`) → `execute(articles)` returns `list[AssessmentResult]`. Uses **comparative ACH scoring**: each pass sends *all* competing hypotheses in one prompt (`LLMInterface.evaluate_hypotheses()`) and the model assigns a mark to each, so it discriminates between them. Runs `llm_num_passes` (default 10) such passes; **per-hypothesis confidence = fraction of passes agreeing with that hypothesis's majority mark** (self-consistency, `measure_self_consistency()`). Flags for human review when any confidence `< confidence_threshold` (0.6). The LLM sees the **full article body** (no truncation); `generate()` sets Ollama `num_ctx=llm_context_window` (default 8192) so long articles aren't silently cut — the chosen model must support that context. Cost: `llm_num_passes` LLM calls per article (default 10, not × hypotheses). Prompt design matters here: the LLM must treat articles that don't discuss the hypotheses' subject as `N/A`, not weak support.
 3. **MatrixAgent** (`agents/matrix_agent.py`) → `execute(assessments)` returns `MatrixAgentState`. Takes `(config, file_manager)`. On init, `_load_matrix_state()` reloads the latest `data/matrix/acch_matrix_v{timestamp}.csv` so tallies **accumulate across runs** (snapshots carry a `hypothesis_id` first column for round-tripping; `article_count` is recovered as the sum of any hypothesis's tallies). Each run re-tallies marks, recomputes `net_support` (weights `++`/`+`/`N/A`/`-`/`--` = +2/+1/0/−1/−2, shared via `_MARK_WEIGHTS`), writes a new microsecond-stamped snapshot, then `cleanup_old_snapshots()` delegates to `FileManager` to prune oldest snapshots past `matrix_storage_cap_gb`.
 
-**Evidence marks** (`++, +, N/A, -, --`) are the central vocabulary, weighted `+2/+1/0/-1/-2` for net support. The weight map is duplicated in `matrix_agent.py:ingest_assessment` and `base.py:MatrixAggregation` — keep them in sync.
+**Evidence marks** (`++, +, N/A, -, --`) are the central vocabulary, weighted `+2/+1/0/-1/-2` for net support via `MatrixAgent._MARK_WEIGHTS` (single source — `_net_support()` uses it for both ingest and snapshot reload).
 
 **Schemas** (`agents/base.py`) are the contract between tiers: Pydantic models (`ArticleData`, `HypothesisScore`, `AssessmentResult`, `MatrixAggregation`) for data crossing boundaries; `@dataclass` `*AgentState` for per-agent internal state. Changing a model ripples to the producing and consuming agent.
 
-**Tools** (`tools/`) are stateless helpers, separate from agent decision logic: `llm_interface.py` (Ollama/vLLM HTTP client, talks to `llm_endpoint`), `web_scraper.py` (BeautifulSoup), `file_manager.py` (persistence/versioning), `audit_logger.py`.
+**Tools** (`tools/`) are stateless helpers, separate from agent decision logic: `llm_interface.py` (Ollama HTTP client at `llm_endpoint` + ACH prompt/parse), `web_scraper.py` (Guardian Content API JSON client), `file_manager.py` (processed-URL + snapshot persistence/pruning), `audit_logger.py` (file audit logs + `rich` console logging).
 
-**Logging** is split by concern via named loggers configured in `tools/audit_logger.py` (`setup_audit_logging` called once at `main.py` import): `logs/agent_interactions.log`, `logs/assessments.log`, `logs/errors.log`. Use `AuditLogger.log_scrape/log_assessment/log_error` rather than ad-hoc logging.
+**Logging** is split by concern via named loggers configured in `tools/audit_logger.py` (`setup_audit_logging` called once at `main.py` import): `logs/agent_interactions.log`, `logs/assessments.log`, `logs/errors.log`. Use `AuditLogger.log_scrape/log_assessment/log_error` rather than ad-hoc logging. `setup_console_logging()` additionally attaches a `rich` console handler to the root logger so a `main.py` run streams live progress to the terminal (module `logger.info` calls in agents/tools surface here); `main.py` then prints the final matrix as a `rich` table via `render_matrix()`. Set `ENABLE_DEBUG_LOGGING=true` for DEBUG-level console output.
 
 ## Conventions & constraints
 
