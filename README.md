@@ -1,7 +1,8 @@
 # Geopolitical ACH Forecasting Agent
 
 **Final Project for CMU Agentic AI Certificate Program (July 2026)**  
-**Student**: James Kajdasz
+**Student**: James Kajdasz  
+**Video Demo**: https://youtu.be/ijaKZi1KcTU
 
 ## Overview
 
