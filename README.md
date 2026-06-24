@@ -86,6 +86,7 @@ After all nations: write `data/matrix/summary.html` — a multi-line chart of al
 
 - Live console: streaming progress + per-nation **hypothesis ranking** (by inconsistency)
 - `data/matrix/summary.html` — all-nations overview page; click a nation's line or legend entry to open its detailed matrix
+<img width="876" height="473" alt="image" src="https://github.com/user-attachments/assets/0ac0b68f-0834-4f13-8d9f-dc296a68332e" />
 - `data/matrix/{nation}/acch_matrix.html` — color-coded ACH matrix for that nation (includes "← Back to Summary" button and US-alignment line graph)
 - `data/matrix/{nation}/matrix_state.json` — canonical matrix state reloaded each run
 - `data/matrix/{nation}/acch_matrix_v*.html` — timestamped HTML snapshots (audit trail)
